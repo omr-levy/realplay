@@ -8,7 +8,7 @@ live leaderboard, and writes final results after a tournament ends.
 - Node.js 18+
 - Docker (for Postgres and Redis)
 
-## Setup
+## Setup (test .env file already provided in this repo)
 
 ```bash
 npm install
@@ -79,7 +79,7 @@ Redis mocked (no real DB/Redis needed).
   bet to a Redis list/stream alongside the existing `ZINCRBY`, then bulk-insert it into a
   `Bet` table from the snapshot job's existing transaction (reusing that job rather than
   scheduling a separate upload) — or, for high-volume/long-running tournaments, drain that
-  stream continuously via a separate workers instead of only at finalization.
+  stream continuously via a separate worker instead of only at finalization.
 
 ## Known limitations
 
@@ -88,3 +88,5 @@ Redis mocked (no real DB/Redis needed).
   Redis's active set, so it simply won't match. The caller still gets
   `{"status": "accepted"}`, since the bet may have matched other active tournaments. A
   fully robust fix would need a reconciliation pass against Postgres.
+- **`PENDING` → `ACTIVE` is not handled.** Currently nothing flips a tournament's status
+  from `PENDING` to `ACTIVE` once `startsAt` passes. If we want to handle this case we should add another job using BullMQ to switch the status.

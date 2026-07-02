@@ -1,2 +1,2 @@
 node_modules
-*.env*
+# *.env* // commented out for demo purposes
