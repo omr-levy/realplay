@@ -40,9 +40,8 @@ The service listens on `http://localhost:3000` by default (see `.env` for `DATAB
 
 ## Data flow
 
-See [docs/dataflow.pdf](docs/dataflow.pdf) for how the four flows — tournament
-creation, bet ingestion, leaderboard reads, and the BullMQ finalization job — read and
-write Postgres and Redis. (Mermaid source: [docs/dataflow.mmd](docs/dataflow.mmd).)
+See [dataflow.pdf](dataflow.pdf) for how tournament creation, bet ingestion, leaderboard
+reads, and the BullMQ finalization job read and write Postgres and Redis.
 
 ## Tests
 
@@ -67,24 +66,18 @@ Redis mocked (no real DB/Redis needed).
 - **Leaderboard source switches on tournament status.** While a tournament is `ACTIVE`
   (or `PENDING`), the leaderboard reads live from Redis. Once `FINALIZED`, it reads the
   persisted `TournamentResult` rows from Postgres instead.
-- **Rank is the sorted array position**, computed at read time (from `ZREVRANGE` for
-  live leaderboards, from the stored `rank` column for finalized ones). Ties are broken
-  by whichever order Redis returns equal scores in — no explicit secondary sort key
-  (e.g. bet recency) is applied.
-- **Finalization grace period.** The BullMQ snapshot job is scheduled for
-  `endsAt + FINALIZE_GRACE_MS` (default 5s, configurable via `.env`), not `endsAt`
-  itself. The tournament stays in the `tournaments:active` ZSET for that extra window,
-  so a bet whose `createdAt` is in-window but which physically arrives at `POST /bet`
-  slightly after `endsAt` (network/processing lag) still gets matched and scored before
-  results are locked in.
+- **Rank is the sorted array position**, computed at read time. Ties are broken by
+  whichever order Redis returns equal scores in — no secondary sort key (e.g. bet
+  recency) is applied.
+- **Finalization grace period.** The BullMQ snapshot job runs at
+  `endsAt + FINALIZE_GRACE_MS` (default 5s, configurable via `.env`) instead of exactly
+  `endsAt`, so a bet that's in-window but arrives at `POST /bet` slightly late still
+  gets matched and scored before results are locked in.
 
 ## Known limitations
 
-- **Late-arriving bets beyond the grace period.** A bet whose `createdAt` falls inside a
-  tournament's window but physically arrives at `POST /bet` later than
-  `endsAt + FINALIZE_GRACE_MS` — i.e. after the snapshot job has already run — will be
-  silently dropped: the tournament is no longer in the `tournaments:active` ZSET, so it
-  simply won't match. No error is returned to the caller (`{"status": "accepted"}` is
-  still sent, since the bet may have matched other currently-active tournaments). The
-  grace period narrows this window but doesn't eliminate it; a fully robust fix would
-  need a reconciliation pass against Postgres for bets that miss the window entirely.
+- **Late bets beyond the grace period.** A bet arriving later than
+  `endsAt + FINALIZE_GRACE_MS` is silently dropped — the tournament is no longer in
+  Redis's active set, so it simply won't match. The caller still gets
+  `{"status": "accepted"}`, since the bet may have matched other active tournaments. A
+  fully robust fix would need a reconciliation pass against Postgres.
