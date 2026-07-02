@@ -55,12 +55,12 @@ Redis mocked (no real DB/Redis needed).
 ## Assumptions and tradeoffs
 
 - **Active-tournament matching is Redis-cached.** `POST /bet` never queries Postgres —
-  it matches bets against the `tournaments:active` ZSET and per-tournament `meta` hash,
-  both populated at tournament-creation time. Postgres remains the source of truth for
-  tournament state; Redis is a derived cache for the hot path.
+  it matches bets against a Redis-cached list of active tournaments, populated when each
+  tournament is created. Postgres remains the source of truth for tournament state;
+  Redis is just a fast cache for this hot path.
 - **Single-currency system.** `currency` is validated on the bet payload but not used in
   scoring — the system assumes all amounts are in USD cents. A multi-currency version
-  would need FX conversion before the `ZINCRBY`.
+  would need to convert to a common currency before adding the bet to the leaderboard.
 - **No auth on `POST /bet`.** The endpoint assumes an internal/trusted caller (e.g. a
   bet-processing pipeline), not a public client.
 - **Leaderboard source switches on tournament status.** While a tournament is `ACTIVE`
@@ -69,10 +69,17 @@ Redis mocked (no real DB/Redis needed).
 - **Rank is the sorted array position**, computed at read time. Ties are broken by
   whichever order Redis returns equal scores in — no secondary sort key (e.g. bet
   recency) is applied.
-- **Finalization grace period.** The BullMQ snapshot job runs at
+- **Finalization grace period.** The background job that snapshots final results runs at
   `endsAt + FINALIZE_GRACE_MS` (default 5s, configurable via `.env`) instead of exactly
   `endsAt`, so a bet that's in-window but arrives at `POST /bet` slightly late still
   gets matched and scored before results are locked in.
+- **Individual bets are not persisted.** Only the aggregate effect of a bet (the leaderboard
+  increment) and its `externalBetId` (for dedup) are kept — there's no audit trail of
+  amounts/players/timestamps per bet. At scale, the natural fix is to append each accepted
+  bet to a Redis list/stream alongside the existing `ZINCRBY`, then bulk-insert it into a
+  `Bet` table from the snapshot job's existing transaction (reusing that job rather than
+  scheduling a separate upload) — or, for high-volume/long-running tournaments, drain that
+  stream continuously via a separate workers instead of only at finalization.
 
 ## Known limitations
 
